@@ -1,0 +1,71 @@
+name: insta-discord
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # 10분마다 (GitHub 사정으로 몇 분씩 늦어질 수 있음)
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "최신 게시물 1개를 바로 보내 테스트"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: insta-discord
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: 설정 파일 만들기 (Secrets → config.json)
+        env:
+          CONFIG_JSON: ${{ secrets.CONFIG_JSON }}
+        run: |
+          if [ -z "$CONFIG_JSON" ]; then echo "CONFIG_JSON Secret 이 없습니다"; exit 1; fi
+          printf '%s' "$CONFIG_JSON" > config.json
+          # 비밀값을 로그에서 가림
+          python - <<'PY'
+          import json
+          c = json.load(open("config.json", encoding="utf-8-sig"))
+          a = c.get("api") or {}
+          vals = [c.get("webhook_url"), c.get("sessionid"), c.get("csrftoken"),
+                  a.get("access_token"), a.get("page_token"), a.get("app_secret")]
+          vals += [x.get("webhook_url") for x in c.get("accounts", []) if isinstance(x, dict)]
+          for v in vals:
+              if v:
+                  print(f"::add-mask::{v}")
+          PY
+
+      - name: 새 게시물 확인
+        run: |
+          if [ "${{ inputs.test }}" = "true" ]; then
+            python insta_discord_bot.py --test
+          else
+            python insta_discord_bot.py --once
+          fi
+
+      - name: 알림 기록(state.json) 저장
+        run: |
+          rm -f config.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # 60일 동안 저장소 활동이 없으면 GitHub 이 예약 실행을 멈추므로, 25일마다 한 번 기록
+          last=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - last )) -gt 2160000 ]; then date -u +%FT%TZ > .keepalive; fi
+          git add -A state.json .keepalive 2>/dev/null || true
+          if git diff --cached --quiet; then echo "변경 없음"; exit 0; fi
+          git commit -m "알림 기록 갱신 [skip ci]"
+          git push
