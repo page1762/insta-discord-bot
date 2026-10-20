@@ -436,6 +436,9 @@ def check_account(account, cfg, state, test=False):
     if test:
         if posts:
             send_to_discord(account, profile, posts[-1])
+            # 테스트로 보낸 게시물도 '보낸 것'으로 기록 → 다음 정기 확인 때 중복 전송 안 함
+            if acc_state["initialized"] and posts[-1]["shortcode"] not in seen:
+                acc_state["seen"].append(posts[-1]["shortcode"])
         else:
             log.warning("[%s] 게시물이 없습니다.", username)
         return
